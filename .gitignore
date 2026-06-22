@@ -1,0 +1,25 @@
+# Local model weights and downloaded artifacts
+models/
+.autodl/
+
+# Generated training outputs, checkpoints, and evaluation artifacts
+outputs/
+
+# Temporary smoke and calibration datasets
+data/smoke_math/
+data/smoke_prompts.jsonl
+data/synthetic_math_target_*/
+
+# Python caches and virtual environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store

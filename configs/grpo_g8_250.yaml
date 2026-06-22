@@ -1,0 +1,11 @@
+group_size: 8
+max_steps: 250
+beta_kl: 0.02
+learning_rate: 5.0e-6
+temperature: 0.8
+top_p: 0.95
+max_new_tokens: 128
+batch_size: 1
+use_lora: true
+dtype: bf16
+trust_remote_code: true
