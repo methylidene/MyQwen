@@ -124,6 +124,7 @@ def train_grpo(config: GRPOConfig) -> None:
         adv = (reward_t - reward_t.mean()) / (reward_t.std(unbiased=False) + 1e-6)
 
         labels = generated[:, 1:].contiguous()
+        #6.告诉模型看哪里
         attn = (generated != tokenizer.pad_token_id).long()
         mask = attn[:, 1:].float()
         # Only optimize generated response tokens; prompt tokens are conditioning context.
@@ -131,6 +132,7 @@ def train_grpo(config: GRPOConfig) -> None:
         out = model(input_ids=generated[:, :-1], attention_mask=attn[:, :-1])
         with torch.no_grad():
             ref_out = ref(input_ids=generated[:, :-1], attention_mask=attn[:, :-1])
+        #7.softmax算p，logp算seq_logp，seq_logp算loss，kl是两个模型的logp差距
         logp = sequence_logprobs(out.logits, labels, mask)
         ref_logp = sequence_logprobs(ref_out.logits, labels, mask)
         seq_logp = logp.sum(dim=-1) / mask.sum(dim=-1).clamp_min(1.0)
@@ -138,9 +140,11 @@ def train_grpo(config: GRPOConfig) -> None:
         policy_loss = -(adv.detach() * seq_logp).mean()
         kl_loss = config.beta_kl * kl
         loss = policy_loss + kl_loss
+        #8.反向传播
         loss.backward()
         opt.step()
         opt.zero_grad(set_to_none=True)
+        #9.更新日志，保存模型
         metrics = {
             "step": step,
             "loss": float(loss.detach().cpu()),
