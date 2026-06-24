@@ -34,6 +34,7 @@ def main() -> None:
     p.add_argument("--output_dir", required=True)
     p.add_argument("--group_size", type=int)
     p.add_argument("--max_steps", type=int)
+    p.add_argument("--max_generated_completion_tokens", type=int)
     p.add_argument("--beta_kl", type=float)
     p.add_argument("--learning_rate", type=float)
     p.add_argument("--temperature", type=float)
