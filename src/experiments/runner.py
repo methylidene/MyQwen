@@ -234,6 +234,7 @@ class ExperimentRunner:
             train_file=c.dataset.source_path,
             group_size=c.grpo.group_size,
             max_steps=c.grpo.max_steps,
+            max_generated_completion_tokens=c.grpo.max_generated_completion_tokens,
             beta_kl=c.grpo.beta_kl,
             clip_eps=c.grpo.clip_eps,
             entropy_coef=c.grpo.entropy_coef,

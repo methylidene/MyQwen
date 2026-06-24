@@ -39,6 +39,7 @@ class GRPOConfig:
     val_file: str | None = None
     group_size: int = 4
     max_steps: int = 1000
+    max_generated_completion_tokens: int | None = None
     beta_kl: float = 0.02
     clip_eps: float = 0.2
     entropy_coef: float = 0.0
@@ -82,6 +83,11 @@ class GRPOConfig:
     final_answer_format: str = "<answer>{answer}</answer>"
     use_chat_template: bool = False
     deterministic_smoke: bool = False
+
+
+def reached_completion_token_budget(rollout_tokens: int, completion_token_budget: int | None) -> bool:
+    """Return whether cumulative generated completion tokens reached the optional cap."""
+    return completion_token_budget is not None and rollout_tokens >= completion_token_budget
 
 
 class GRPOTrainerEngine(BaseAlignmentTrainer):
@@ -239,12 +245,19 @@ class GRPOTrainerEngine(BaseAlignmentTrainer):
             reward_components={name: sum(values) / len(values) for name, values in numeric_components.items()},
         )
 
-    def train(self, examples: list[ReasoningExample], formatter: PromptFormatter) -> None:
+    def train(self, examples: list[ReasoningExample], formatter: PromptFormatter) -> str:
         self.maybe_resume()
-        for index in tqdm(range(self.state.global_step, self.config.max_steps), desc="grpo"):
-            example = examples[index % len(examples)]
+        progress = tqdm(total=self.config.max_steps, initial=self.state.global_step, desc="grpo")
+        while self.state.global_step < self.config.max_steps:
+            if reached_completion_token_budget(
+                self.state.rollout_tokens, self.config.max_generated_completion_tokens
+            ):
+                progress.close()
+                return "completion_token_budget"
+            example = examples[self.state.global_step % len(examples)]
             batch = self.rollout(example, formatter)
             metrics = self.optimize(batch)
+            progress.update(1)
             append_jsonl([metrics.to_dict()], self.output_dir / "train_metrics.jsonl")
             append_jsonl([
                 {"step": metrics.step, "prompt": batch.prompt, "response": response, "gold_answer": example.reference_answer, "reward": reward}
@@ -254,6 +267,10 @@ class GRPOTrainerEngine(BaseAlignmentTrainer):
                 print(f"grpo step={metrics.step} loss={metrics.loss:.6f} reward={metrics.reward_mean:.4f} kl={metrics.kl:.6f}", flush=True)
             if self.config.checkpoint_interval and metrics.step % self.config.checkpoint_interval == 0:
                 self.checkpoint(asdict(self.config))
+        progress.close()
+        if reached_completion_token_budget(self.state.rollout_tokens, self.config.max_generated_completion_tokens):
+            return "completion_token_budget"
+        return "max_steps"
 
 
 def _load_backend(config: GRPOConfig, *, reference: bool = False) -> ModelBackend:
@@ -300,7 +317,7 @@ def train_grpo(config: GRPOConfig) -> None:
     save_json(asdict(config), Path(config.output_dir) / "config.json")
     save_json(fingerprint.to_dict(), Path(config.output_dir) / "dataset_fingerprint.json")
     engine = GRPOTrainerEngine(policy, config, config.output_dir, reference)
-    engine.train(examples, PromptFormatter(config.system_prompt, config.final_answer_format))
+    stop_reason = engine.train(examples, PromptFormatter(config.system_prompt, config.final_answer_format))
     final_checkpoint = Path(config.output_dir) / "checkpoint"
     policy.save_pretrained(final_checkpoint)  # Legacy path.
     write_bilingual_readme(
@@ -311,4 +328,11 @@ def train_grpo(config: GRPOConfig) -> None:
         preserve_existing=True,
     )
     engine.checkpoint(asdict(config))
-    save_json({"final_step": engine.state.global_step, "rollout_tokens": engine.state.rollout_tokens}, Path(config.output_dir) / "metrics.json")
+    save_json(
+        {
+            "final_step": engine.state.global_step,
+            "rollout_tokens": engine.state.rollout_tokens,
+            "stop_reason": stop_reason,
+        },
+        Path(config.output_dir) / "metrics.json",
+    )

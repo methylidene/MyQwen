@@ -116,3 +116,20 @@ def test_evaluation_cannot_use_train_split(tmp_path):
     value["task"] = "evaluation"
     with pytest.raises(ValueError, match="cannot use the train split"):
         experiment_from_dict(value)
+
+
+def test_runner_propagates_grpo_completion_token_budget(tmp_path, monkeypatch):
+    value = mapping(tmp_path)
+    value["task"] = "grpo"
+    value["grpo"] = {"max_generated_completion_tokens": 256}
+    runner = ExperimentRunner(experiment_from_dict(value), ["python", "-m", "test"])
+    runner.prepare()
+    captured = {}
+
+    def fake_train_grpo(config):
+        captured["config"] = config
+
+    monkeypatch.setattr("src.alignment.grpo_trainer.train_grpo", fake_train_grpo)
+    runner._run_grpo()
+
+    assert captured["config"].max_generated_completion_tokens == 256
