@@ -32,6 +32,19 @@ def test_config_validation_requires_formal_seeds(tmp_path):
         experiment_from_dict(value)
 
 
+def test_grpo_generated_completion_token_budget_must_be_positive_when_provided(tmp_path):
+    value = mapping(tmp_path)
+    value["grpo"] = {"max_generated_completion_tokens": 0}
+    with pytest.raises(ValueError, match="GRPO max_generated_completion_tokens must be positive when provided."):
+        experiment_from_dict(value)
+
+
+def test_grpo_generated_completion_token_budget_is_configurable(tmp_path):
+    value = mapping(tmp_path)
+    value["grpo"] = {"max_generated_completion_tokens": 256}
+    assert experiment_from_dict(value).grpo.max_generated_completion_tokens == 256
+
+
 def test_config_overrides_and_unknown_keys(tmp_path):
     config_path = tmp_path / "config.yaml"
     import yaml

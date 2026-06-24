@@ -67,6 +67,7 @@ class SFTConfig:
 @dataclass(frozen=True)
 class GRPOConfig:
     max_steps: int = 1000
+    max_generated_completion_tokens: int | None = None
     group_size: int = 4
     learning_rate: float = 5e-6
     weight_decay: float = 0.0
@@ -131,6 +132,8 @@ class ExperimentConfig:
             raise ValueError("GRPO group_size must be at least 2.")
         if self.generation.temperature <= 0:
             raise ValueError("generation.temperature must be positive.")
+        if self.grpo.max_generated_completion_tokens is not None and self.grpo.max_generated_completion_tokens <= 0:
+            raise ValueError("GRPO max_generated_completion_tokens must be positive when provided.")
         if self.grpo.beta_kl < 0 or self.grpo.clip_eps < 0:
             raise ValueError("GRPO beta_kl and clip_eps must be non-negative.")
 
