@@ -39,7 +39,7 @@ class SyntheticArithmeticAdapter(DatasetAdapter):
 
     def load(self, config: DatasetLoadConfig) -> list[ReasoningExample]:
         if not config.source_path:
-            raise ValueError("SyntheticArithmeticAdapter requires source_path (for example data/synthetic_math/train.jsonl).")
+            raise ValueError("SyntheticArithmeticAdapter requires source_path (for example data/synthetic_arithmetic/v01_original/train.jsonl).")
         rows = read_jsonl(config.source_path)
         examples: list[ReasoningExample] = []
         for index, row in enumerate(rows):
@@ -78,6 +78,10 @@ class GSM8KAdapter(DatasetAdapter):
     def load(self, config: DatasetLoadConfig) -> list[ReasoningExample]:
         if config.split not in {"train", "test"}:
             raise ValueError("GSM8K exposes only 'train' and 'test' splits.")
+        if config.source_path:
+            rows = read_jsonl(config.source_path)
+            examples = [ReasoningExample(**row) for row in rows]
+            return examples
         try:
             from datasets import load_dataset
         except ImportError as exc:

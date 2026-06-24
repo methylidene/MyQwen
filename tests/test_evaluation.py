@@ -62,8 +62,11 @@ def test_tiny_evaluation_outputs_and_pass_at_k(tmp_path):
     grouped = metrics_by_group(predictions)
     assert grouped["groups"]["difficulty"]["easy"]["n"] == 2
     write_evaluation_outputs(tmp_path, predictions, tmp_path, {"tiny": True})
-    for name in ("predictions.jsonl", "metrics.json", "metrics_by_group.json", "summary.csv", "error_cases.jsonl", "report.md", "figures"):
+    for name in ("README.md", "predictions.jsonl", "metrics.json", "metrics_by_group.json", "summary.csv", "error_cases.jsonl", "report.md", "figures"):
         assert (tmp_path / name).exists()
+    readme = (tmp_path / "README.md").read_text(encoding="utf-8")
+    assert "## English" in readme
+    assert "## 中文" in readme
     report = (tmp_path / "report.md").read_text(encoding="utf-8")
     assert "## Error Analysis" in report
 

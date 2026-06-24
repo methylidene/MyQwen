@@ -11,7 +11,7 @@ from tqdm import tqdm
 from src.alignment.training_core import AlignmentConfig, BaseAlignmentTrainer, OptimizerConfig, TrainingMetrics
 from src.data import DatasetLoadConfig, DatasetRegistry, PromptFormatter, ReasoningExample
 from src.models.backend import ModelBackend, ModelBackendRegistry, ModelInputs, ModelLoadConfig
-from src.utils.io import append_jsonl, ensure_dir, save_json
+from src.utils.io import append_jsonl, ensure_dir, save_json, write_bilingual_readme
 
 
 @dataclass
@@ -246,6 +246,14 @@ def train_sft(config: SFTConfig) -> None:
     save_json(asdict(config), Path(config.output_dir) / "config.json")
     engine = SFTTrainerEngine(backend, config, config.output_dir)
     state = engine.train(train_loader, validation_loader)
-    backend.save_pretrained(Path(config.output_dir) / "checkpoint")  # Legacy checkpoint path.
+    final_checkpoint = Path(config.output_dir) / "checkpoint"
+    backend.save_pretrained(final_checkpoint)  # Legacy checkpoint path.
+    write_bilingual_readme(
+        final_checkpoint,
+        title="SFT Checkpoint",
+        english="Final SFT checkpoint for this run. Load this directory for downstream SFT-continued, GRPO or evaluation stages.",
+        chinese="这是本次运行的最终 SFT checkpoint。后续 SFT-continued、GRPO 或评测阶段请加载这个目录。",
+        preserve_existing=True,
+    )
     engine.checkpoint(asdict(config))
     save_json({"final_step": state.global_step, "train_tokens": state.train_tokens}, Path(config.output_dir) / "metrics.json")

@@ -150,6 +150,19 @@ def test_malformed_and_duplicate_samples_are_audited(tmp_path):
         load_synthetic(source, strict=True)
 
 
+def test_gsm8k_canonical_jsonl_source_is_supported(tmp_path):
+    source = tmp_path / "gsm8k_test.jsonl"
+    source.write_text(json.dumps({
+        "uid": "gsm8k-local-1", "dataset_name": "gsm8k", "split": "test", "question": "1+1?",
+        "reference_answer": "2", "reference_solution": "#### 2", "difficulty": None, "metadata": {"raw_answer": "#### 2"},
+    }) + "\n", encoding="utf-8")
+    examples, _, report = DatasetRegistry.load(DatasetLoadConfig(
+        dataset_name="gsm8k", split="test", source_path=str(source), purpose="eval",
+    ))
+    assert examples[0].uid == "gsm8k-local-1"
+    assert report.is_valid
+
+
 def test_adapter_classes_are_registered():
     assert isinstance(DatasetRegistry.get("synthetic_arithmetic"), SyntheticArithmeticAdapter)
     assert isinstance(DatasetRegistry.get("gsm8k"), GSM8KAdapter)

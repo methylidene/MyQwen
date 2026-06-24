@@ -90,6 +90,8 @@ class EvaluationConfig:
 @dataclass(frozen=True)
 class LoggingConfig:
     output_root: str = "outputs/experiments"
+    experiment_dir: str | None = None
+    stage_name: str | None = None
     run_id: str | None = None
     resume_from: str | None = None
     allow_existing: bool = False
@@ -207,6 +209,6 @@ def dump_resolved_config(config: ExperimentConfig, path: str | Path) -> None:
 def _semantic_dict(data: dict[str, Any]) -> dict[str, Any]:
     data = json.loads(json.dumps(data))
     logging = data.get("logging", {})
-    for key in ("run_id", "resume_from", "allow_existing", "output_root"):
+    for key in ("run_id", "resume_from", "allow_existing", "output_root", "experiment_dir", "stage_name"):
         logging.pop(key, None)
     return data

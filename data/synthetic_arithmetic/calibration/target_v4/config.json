@@ -1,0 +1,11 @@
+{
+  "output_dir": "data/synthetic_math_target_v4",
+  "num_train": 10000,
+  "num_val": 1000,
+  "num_test": 1000,
+  "easy_ratio": 0.4,
+  "medium_ratio": 0.4,
+  "hard_ratio": 0.2,
+  "seed": 42,
+  "profile": "target_v4"
+}

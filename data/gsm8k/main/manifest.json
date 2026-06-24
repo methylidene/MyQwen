@@ -1,0 +1,9 @@
+{
+  "dataset_name": "gsm8k",
+  "config_name": "main",
+  "splits": [
+    "train",
+    "test"
+  ],
+  "format": "ReasoningExample JSONL"
+}

@@ -1,0 +1,21 @@
+{
+  "fingerprint": {
+    "value": "de78bf7d879b616510d7bae9d18da34931b27893d000eb056930a172621cb654",
+    "num_examples": 1319,
+    "dataset_name": "gsm8k",
+    "split": "test",
+    "revision": null
+  },
+  "audit": {
+    "total_examples": 1319,
+    "valid_examples": 1319,
+    "invalid_count": 0,
+    "duplicate_uid_count": 0,
+    "duplicate_uids": {},
+    "empty_questions": 0,
+    "empty_answers": 0,
+    "unparseable_answers": 0,
+    "split_mismatches": 0,
+    "is_valid": true
+  }
+}

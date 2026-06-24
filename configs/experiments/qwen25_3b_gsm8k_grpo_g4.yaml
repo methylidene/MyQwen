@@ -1,4 +1,4 @@
-name: qwen25_3b_gsm8k_grpo_g4.yaml
+name: qwen25_3b_gsm8k_GRPO-G4-250
 task: grpo
 smoke: false
 seed: 123
@@ -17,7 +17,7 @@ dataset:
   split: train
   config_name: main
   revision: null
-  source_path: null
+  source_path: data/gsm8k/main/train.jsonl
   cache_dir: data/.cache/hf
   max_samples: null
   shuffle: true
@@ -28,10 +28,10 @@ generation:
   max_new_tokens: 128
   max_prompt_length: 384
   system_prompt: null
-  final_answer_format: "<answer>{answer}</answer>"
+  final_answer_format: <answer>{answer}</answer>
   use_chat_template: false
 sft:
-  learning_rate: 2.0e-5
+  learning_rate: 2.0e-05
   weight_decay: 0.0
   num_train_epochs: 1.0
   max_steps: -1
@@ -44,12 +44,12 @@ sft:
 grpo:
   max_steps: 250
   group_size: 4
-  learning_rate: 5.0e-6
+  learning_rate: 5.0e-06
   weight_decay: 0.0
   beta_kl: 0.02
   clip_eps: 0.2
   entropy_coef: 0.0
-  advantage_epsilon: 1.0e-6
+  advantage_epsilon: 1.0e-06
   forward_micro_batch_size: 2
   use_reference_policy: true
   gradient_checkpointing: false
@@ -59,10 +59,12 @@ evaluation:
   checkpoint_dirs: []
   max_new_tokens: 128
 logging:
-  output_root: outputs/experiments
+  output_root: outputs/v02_qwen25_3b
   run_id: null
   resume_from: null
   allow_existing: false
+  experiment_dir: exp01_gsm8k_main
+  stage_name: GRPO-G4-250
 budget:
   max_steps: null
   max_wall_time_seconds: null

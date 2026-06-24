@@ -1,0 +1,8 @@
+{"id": "val-000000", "difficulty": "easy", "prompt": "Solve. Return only reasoning and answer tags.\nProblem: 2 - 65", "answer": "-63", "metadata": {"expr": "2 - 65"}}
+{"id": "val-000001", "difficulty": "medium", "prompt": "Solve. Use <reasoning>...</reasoning> and <answer>...</answer>.\nProblem: (38 - 25) * 11 + 17", "answer": "160", "metadata": {"expr": "(38 - 25) * 11 + 17"}}
+{"id": "val-000002", "difficulty": "easy", "prompt": "Solve. Return only reasoning and answer tags.\nProblem: 96 - 55", "answer": "41", "metadata": {"expr": "96 - 55"}}
+{"id": "val-000003", "difficulty": "medium", "prompt": "Solve. Use <reasoning>...</reasoning> and <answer>...</answer>.\nProblem: (13 - 5) * 3 + 12", "answer": "36", "metadata": {"expr": "(13 - 5) * 3 + 12"}}
+{"id": "val-000004", "difficulty": "medium", "prompt": "Solve. Use <reasoning>...</reasoning> and <answer>...</answer>.\nProblem: (11 - 8) * 4 + 15", "answer": "27", "metadata": {"expr": "(11 - 8) * 4 + 15"}}
+{"id": "val-000005", "difficulty": "medium", "prompt": "Solve. Use <reasoning>...</reasoning> and <answer>...</answer>.\nProblem: (10 - 26) * 11 + 8", "answer": "-168", "metadata": {"expr": "(10 - 26) * 11 + 8"}}
+{"id": "val-000006", "difficulty": "medium", "prompt": "Solve. Use <reasoning>...</reasoning> and <answer>...</answer>.\nProblem: (38 + 13) * 8 - 18", "answer": "390", "metadata": {"expr": "(38 + 13) * 8 - 18"}}
+{"id": "val-000007", "difficulty": "medium", "prompt": "Solve. Use <reasoning>...</reasoning> and <answer>...</answer>.\nProblem: (5 - 13) * 2 + 9", "answer": "-7", "metadata": {"expr": "(5 - 13) * 2 + 9"}}

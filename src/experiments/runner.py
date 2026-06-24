@@ -69,6 +69,27 @@ def _utc_now() -> str:
     return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _slug(value: str) -> str:
+    sanitized = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in value.replace(".yaml", ""))
+    return "_".join(part for part in sanitized.split("_") if part) or "experiment"
+
+
+def _default_stage_name(config: ExperimentConfig) -> str:
+    if config.task == "sft":
+        model_path = Path(config.model.model_name_or_path)
+        return "SFT-continued" if (model_path / "checkpoint").exists() or model_path.name.startswith("SFT-") else "SFT-only"
+    if config.task == "grpo":
+        return f"GRPO-G{config.grpo.group_size}-{config.grpo.max_steps}"
+    if config.task in {"evaluation", "zero_shot"}:
+        return "evaluation" if config.task == "evaluation" else "zero-shot"
+    return _slug(config.task)
+
+
+def _readme(path: Path, lines: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+
 class ExperimentRunner:
     """Execute one validated experiment without silently overwriting artifacts."""
 
@@ -76,7 +97,17 @@ class ExperimentRunner:
         self.config = config
         self.command = command or list(sys.argv)
         self.run_id = config.logging.run_id or f"{dt.datetime.now(dt.timezone.utc):%Y%m%dT%H%M%SZ}-{config.config_hash()[:8]}"
-        self.run_dir = Path(config.logging.output_root) / config.name / self.run_id
+        self.grouped_layout = bool(config.logging.experiment_dir or config.logging.stage_name)
+        if self.grouped_layout:
+            experiment_dir = config.logging.experiment_dir or _slug(config.name)
+            stage_name = config.logging.stage_name or _default_stage_name(config)
+            self.experiment_dir = Path(config.logging.output_root) / experiment_dir
+            self.stage_dir = self.experiment_dir / stage_name
+            self.run_dir = self.stage_dir / self.run_id
+        else:
+            self.experiment_dir = Path(config.logging.output_root) / config.name
+            self.stage_dir = self.experiment_dir
+            self.run_dir = self.experiment_dir / self.run_id
         self._started: float | None = None
         self._start_utc: str | None = None
         self._fingerprint: dict[str, Any] | None = None
@@ -90,6 +121,7 @@ class ExperimentRunner:
             raise FileExistsError(f"Refusing to overwrite existing run directory: {self.run_dir}")
         self.run_dir.mkdir(parents=True, exist_ok=False)
         (self.run_dir / "checkpoints").mkdir()
+        self._write_readmes()
         write_jsonl([], self.run_dir / "metrics.jsonl")
         write_jsonl([], self.run_dir / "predictions.jsonl")
         dump_resolved_config(self.config, self.run_dir / "resolved_config.yaml")
@@ -325,6 +357,46 @@ class ExperimentRunner:
         if torch.cuda.is_available():
             lines.append(f"gpu={torch.cuda.get_device_name(torch.cuda.current_device())}")
         (self.run_dir / "environment.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def _write_readmes(self) -> None:
+        if self.grouped_layout:
+            _readme(self.experiment_dir / "README.md", [
+                f"# {self.experiment_dir.name}",
+                "",
+                "## English",
+                "This directory groups one coherent experiment batch. SFT-only, SFT-continued, GRPO variants and evaluation runs that use the same SFT data should stay under this directory.",
+                "Use a new numbered experiment directory when the SFT training data changes, and include the data identity in the directory name.",
+                "",
+                "## 中文",
+                "这个目录用于归档同一批完整实验。使用同一份 SFT 数据的 SFT-only、SFT-continued、GRPO 变体和评测结果应放在这里。",
+                "如果更换了 SFT 训练数据，请创建新的编号实验目录，并在目录名称中标注数据身份。",
+            ])
+            _readme(self.stage_dir / "README.md", [
+                f"# {self.stage_dir.name}",
+                "",
+                "## English",
+                f"Stage directory for `{self.config.task}` runs in experiment `{self.experiment_dir.name}`.",
+                "Each child directory is one immutable runner invocation with resolved config, metrics, predictions and checkpoints.",
+                "",
+                "## 中文",
+                f"这是实验 `{self.experiment_dir.name}` 下的 `{self.config.task}` 阶段目录。",
+                "每个子目录对应一次不可变的 runner 调用，包含解析后的配置、指标、预测和 checkpoint。",
+            ])
+        _readme(self.run_dir / "README.md", [
+            f"# {self.config.name}",
+            "",
+            "## English",
+            f"Task: `{self.config.task}`. Run id: `{self.run_id}`.",
+            f"Dataset: `{self.config.dataset.name}` / `{self.config.dataset.split}` / `{self.config.dataset.source_path}`.",
+            "Artifacts include resolved configuration, manifest, command, Git state, environment, dataset fingerprint, metrics, predictions and checkpoints when produced.",
+            "Evaluation reports remain in `report.md` and are intentionally not bilingual.",
+            "",
+            "## 中文",
+            f"任务：`{self.config.task}`。运行 ID：`{self.run_id}`。",
+            f"数据集：`{self.config.dataset.name}` / `{self.config.dataset.split}` / `{self.config.dataset.source_path}`。",
+            "产物包括解析后的配置、manifest、命令、Git 状态、环境信息、数据指纹、指标、预测，以及训练产生的 checkpoint。",
+            "评测报告仍写入 `report.md`，并且有意不做双语输出。",
+        ])
 
     def _check_resume_compatibility(self) -> None:
         resume = self.config.logging.resume_from

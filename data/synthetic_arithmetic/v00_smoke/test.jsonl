@@ -1,0 +1,8 @@
+{"id": "test-000000", "difficulty": "medium", "prompt": "Solve. Use <reasoning>...</reasoning> and <answer>...</answer>.\nProblem: (12 - 34) * 6 + 12", "answer": "-120", "metadata": {"expr": "(12 - 34) * 6 + 12"}}
+{"id": "test-000001", "difficulty": "medium", "prompt": "Solve. Use <reasoning>...</reasoning> and <answer>...</answer>.\nProblem: (39 + 27) * 12 - 2", "answer": "790", "metadata": {"expr": "(39 + 27) * 12 - 2"}}
+{"id": "test-000002", "difficulty": "hard", "prompt": "Solve the word problem. Use <reasoning>...</reasoning> and <answer>...</answer>.\nProblem: A has 36 apples, gives 1/4 away, then buys 24 more. How many now?", "answer": "51", "metadata": {"apples": 36, "denom": 4, "bought": 24}}
+{"id": "test-000003", "difficulty": "easy", "prompt": "Solve. Return only reasoning and answer tags.\nProblem: 20 + 14", "answer": "34", "metadata": {"expr": "20 + 14"}}
+{"id": "test-000004", "difficulty": "easy", "prompt": "Solve. Return only reasoning and answer tags.\nProblem: 75 - 12", "answer": "63", "metadata": {"expr": "75 - 12"}}
+{"id": "test-000005", "difficulty": "easy", "prompt": "Solve. Return only reasoning and answer tags.\nProblem: 40 - 13", "answer": "27", "metadata": {"expr": "40 - 13"}}
+{"id": "test-000006", "difficulty": "easy", "prompt": "Solve. Return only reasoning and answer tags.\nProblem: 4 - 44", "answer": "-40", "metadata": {"expr": "4 - 44"}}
+{"id": "test-000007", "difficulty": "easy", "prompt": "Solve. Return only reasoning and answer tags.\nProblem: 12 - 61", "answer": "-49", "metadata": {"expr": "12 - 61"}}

@@ -28,7 +28,7 @@ def target_text(answer: str) -> str:
 
 
 # Original generators retained for experiment provenance. The target profiles below
-# are generated into separate directories and never overwrite data/synthetic_math.
+# are generated into separate directories and never overwrite data/synthetic_arithmetic/v01_original.
 #
 # def make_easy(rng: random.Random, sid: str) -> MathSample:
 #     a, b = rng.randint(0, 99), rng.randint(0, 99)

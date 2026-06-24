@@ -1,0 +1,4 @@
+{"prompt": "请计算 12 + 7，并只给出答案。"}
+{"prompt": "Explain briefly why KV cache speeds up autoregressive decoding."}
+{"prompt": "What is 23 plus 18 minus 5?"}
+{"prompt": "请用一句话解释什么是 RoPE 位置编码。"}

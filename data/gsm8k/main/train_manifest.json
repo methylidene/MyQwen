@@ -1,0 +1,21 @@
+{
+  "fingerprint": {
+    "value": "16da767d7b0c1acf7ccd109578687100ffbff68b95407c3d8bf4216b60bdab50",
+    "num_examples": 7473,
+    "dataset_name": "gsm8k",
+    "split": "train",
+    "revision": null
+  },
+  "audit": {
+    "total_examples": 7473,
+    "valid_examples": 7473,
+    "invalid_count": 0,
+    "duplicate_uid_count": 0,
+    "duplicate_uids": {},
+    "empty_questions": 0,
+    "empty_answers": 0,
+    "unparseable_answers": 0,
+    "split_mismatches": 0,
+    "is_valid": true
+  }
+}

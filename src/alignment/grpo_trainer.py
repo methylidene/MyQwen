@@ -28,7 +28,7 @@ from src.alignment.training_core import (
 )
 from src.data import DatasetLoadConfig, DatasetRegistry, PromptFormatter, ReasoningExample
 from src.models.backend import ModelBackend, ModelBackendRegistry, ModelInputs, ModelLoadConfig
-from src.utils.io import append_jsonl, ensure_dir, save_json
+from src.utils.io import append_jsonl, ensure_dir, save_json, write_bilingual_readme
 
 
 @dataclass
@@ -301,6 +301,14 @@ def train_grpo(config: GRPOConfig) -> None:
     save_json(fingerprint.to_dict(), Path(config.output_dir) / "dataset_fingerprint.json")
     engine = GRPOTrainerEngine(policy, config, config.output_dir, reference)
     engine.train(examples, PromptFormatter(config.system_prompt, config.final_answer_format))
-    policy.save_pretrained(Path(config.output_dir) / "checkpoint")  # Legacy path.
+    final_checkpoint = Path(config.output_dir) / "checkpoint"
+    policy.save_pretrained(final_checkpoint)  # Legacy path.
+    write_bilingual_readme(
+        final_checkpoint,
+        title="GRPO Checkpoint",
+        english="Final GRPO policy checkpoint for this run. Load this directory for evaluation or continued training.",
+        chinese="这是本次运行的最终 GRPO policy checkpoint。评测或继续训练时请加载这个目录。",
+        preserve_existing=True,
+    )
     engine.checkpoint(asdict(config))
     save_json({"final_step": engine.state.global_step, "rollout_tokens": engine.state.rollout_tokens}, Path(config.output_dir) / "metrics.json")

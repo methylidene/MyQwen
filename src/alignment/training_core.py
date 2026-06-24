@@ -11,7 +11,7 @@ import torch
 
 from src.alignment.rewards import rule_based_reward
 from src.models.backend import ModelBackend
-from src.utils.io import save_json
+from src.utils.io import save_json, write_bilingual_readme
 
 
 @dataclass(frozen=True)
@@ -136,7 +136,15 @@ class CheckpointManager:
     def save(self, backend: ModelBackend, optimizer: torch.optim.Optimizer, state: TrainerState, resolved_config: dict[str, Any]) -> Path:
         target = self.output_dir / f"checkpoint-step-{state.global_step:08d}"
         target.mkdir(parents=True, exist_ok=True)
-        backend.save_pretrained(target / "model")
+        model_dir = target / "model"
+        backend.save_pretrained(model_dir)
+        write_bilingual_readme(
+            model_dir,
+            title=f"Rotating Checkpoint Step {state.global_step}",
+            english="Reloadable model snapshot saved by the rotating trainer checkpoint manager.",
+            chinese="这是轮转训练 checkpoint 管理器保存的可重新加载模型快照。",
+            preserve_existing=True,
+        )
         payload = {
             "trainer_state": state.to_dict(),
             "optimizer": optimizer.state_dict(),

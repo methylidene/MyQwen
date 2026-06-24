@@ -1,0 +1,10 @@
+{
+  "output_dir": "data/smoke_math",
+  "num_train": 32,
+  "num_val": 8,
+  "num_test": 8,
+  "easy_ratio": 0.4,
+  "medium_ratio": 0.4,
+  "hard_ratio": 0.2,
+  "seed": 42
+}

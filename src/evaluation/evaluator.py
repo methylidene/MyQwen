@@ -13,7 +13,7 @@ import torch
 
 from src.alignment.rewards import rule_based_reward
 from src.data import AnswerExtractor, PromptFormatter, ReasoningExample
-from src.utils.io import save_json, write_csv, write_jsonl
+from src.utils.io import save_json, write_bilingual_readme, write_csv, write_jsonl
 
 
 @dataclass(frozen=True)
@@ -263,6 +263,13 @@ def training_rollout_tokens(checkpoint: str | Path) -> int | None:
 def write_evaluation_outputs(output_dir: str | Path, predictions: list[dict[str, Any]], checkpoint: str | Path, config: dict[str, Any]) -> dict[str, Any]:
     destination = Path(output_dir)
     destination.mkdir(parents=True, exist_ok=True)
+    write_bilingual_readme(
+        destination,
+        title="Evaluation Outputs",
+        english="Evaluation artifact directory containing predictions, metrics, grouped summaries, error cases, figures and an English report.md.",
+        chinese="这是评测产物目录，包含预测、指标、分组汇总、错误样例、图表，以及英文 report.md。",
+        preserve_existing=False,
+    )
     (destination / "figures").mkdir(exist_ok=True)
     rollout_tokens = training_rollout_tokens(checkpoint)
     grouped = metrics_by_group(predictions, rollout_tokens)

@@ -61,3 +61,33 @@ def write_csv(rows: Iterable[dict[str, Any]], path: str | Path) -> None:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def write_bilingual_readme(
+    directory: str | Path,
+    *,
+    title: str,
+    english: str,
+    chinese: str,
+    preserve_existing: bool = False,
+) -> None:
+    destination = Path(directory) / "README.md"
+    existing = destination.read_text(encoding="utf-8") if preserve_existing and destination.exists() else ""
+    marker = "<!-- codex-bilingual-readme -->"
+    if marker in existing:
+        existing = existing.split("<!-- /codex-bilingual-readme -->", 1)[-1].lstrip("\n")
+    lines = [
+        marker,
+        f"# {title}",
+        "",
+        "## English",
+        english,
+        "",
+        "## 中文",
+        chinese,
+        "<!-- /codex-bilingual-readme -->",
+    ]
+    if existing.strip():
+        lines.extend(["", existing.rstrip()])
+    ensure_dir(destination.parent)
+    destination.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
