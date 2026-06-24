@@ -32,10 +32,13 @@ def test_config_validation_requires_formal_seeds(tmp_path):
         experiment_from_dict(value)
 
 
-def test_grpo_generated_completion_token_budget_must_be_positive_when_provided(tmp_path):
+@pytest.mark.parametrize("max_generated_completion_tokens", [-1, 0, True, 1.5])
+def test_grpo_generated_completion_token_budget_must_be_positive_int_when_provided(
+    tmp_path, max_generated_completion_tokens
+):
     value = mapping(tmp_path)
-    value["grpo"] = {"max_generated_completion_tokens": 0}
-    with pytest.raises(ValueError, match="GRPO max_generated_completion_tokens must be positive when provided."):
+    value["grpo"] = {"max_generated_completion_tokens": max_generated_completion_tokens}
+    with pytest.raises(ValueError, match="max_generated_completion_tokens"):
         experiment_from_dict(value)
 
 

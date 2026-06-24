@@ -132,7 +132,12 @@ class ExperimentConfig:
             raise ValueError("GRPO group_size must be at least 2.")
         if self.generation.temperature <= 0:
             raise ValueError("generation.temperature must be positive.")
-        if self.grpo.max_generated_completion_tokens is not None and self.grpo.max_generated_completion_tokens <= 0:
+        max_generated_completion_tokens = self.grpo.max_generated_completion_tokens
+        if max_generated_completion_tokens is not None and (
+            isinstance(max_generated_completion_tokens, bool)
+            or not isinstance(max_generated_completion_tokens, int)
+            or max_generated_completion_tokens <= 0
+        ):
             raise ValueError("GRPO max_generated_completion_tokens must be positive when provided.")
         if self.grpo.beta_kl < 0 or self.grpo.clip_eps < 0:
             raise ValueError("GRPO beta_kl and clip_eps must be non-negative.")
