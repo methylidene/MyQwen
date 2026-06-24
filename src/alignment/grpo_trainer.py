@@ -1,181 +1,306 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
+from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import torch
 from tqdm import tqdm
 
-from src.alignment.kl_utils import approximate_kl, sequence_logprobs
-from src.alignment.rewards import rule_based_reward
-from src.utils.io import append_jsonl, ensure_dir, read_jsonl, save_json
+from src.alignment.kl_utils import (
+    approximate_kl,
+    clipped_policy_loss,
+    normalize_group_advantages,
+    sequence_logprobs,
+    token_entropy,
+)
+from src.alignment.training_core import (
+    AlignmentConfig,
+    BaseAlignmentTrainer,
+    GRPOBatch,
+    ModelGenerationBackend,
+    OptimizerConfig,
+    RewardPipeline,
+    RolloutBatch,
+    RuleBasedRewardPipeline,
+    TrainingMetrics,
+)
+from src.data import DatasetLoadConfig, DatasetRegistry, PromptFormatter, ReasoningExample
+from src.models.backend import ModelBackend, ModelBackendRegistry, ModelInputs, ModelLoadConfig
+from src.utils.io import append_jsonl, ensure_dir, save_json
 
 
 @dataclass
 class GRPOConfig:
     model_name_or_path: str
-    train_file: str
-    val_file: str | None
     output_dir: str
+    train_file: str | None = None
+    val_file: str | None = None
     group_size: int = 4
     max_steps: int = 1000
     beta_kl: float = 0.02
+    clip_eps: float = 0.2
+    entropy_coef: float = 0.0
+    advantage_epsilon: float = 1e-6
     learning_rate: float = 5e-6
+    weight_decay: float = 0.0
     temperature: float = 0.8
     top_p: float = 0.95
     max_new_tokens: int = 128
     max_prompt_length: int = 384
     batch_size: int = 1
-    clip_eps: float = 0.2
+    forward_micro_batch_size: int = 4
+    use_reference_policy: bool = True
     use_lora: bool = True
+    backend_name: str = "huggingface"
+    model_revision: str | None = None
+    custom_factory_name: str | None = None
+    device: str = "cuda"
     trust_remote_code: bool = True
     dtype: str = "bf16"
     bf16: bool = False
     fp16: bool = False
+    gradient_checkpointing: bool = False
     logging_steps: int = 10
+    checkpoint_interval: int = 0
+    checkpoint_keep: int = 2
+    resume_from_checkpoint: str | None = None
+    lora_r: int = 8
+    lora_alpha: int = 16
+    lora_dropout: float = 0.05
+    lora_target_modules: list[str] | None = None
+    dataset_name: str = "synthetic_arithmetic"
+    dataset_split: str = "train"
+    dataset_config_name: str | None = None
+    dataset_revision: str | None = None
+    dataset_cache_dir: str | None = None
+    max_samples: int | None = None
+    dataset_seed: int = 42
+    dataset_shuffle: bool = False
+    system_prompt: str | None = None
+    final_answer_format: str = "<answer>{answer}</answer>"
+    use_chat_template: bool = False
+    deterministic_smoke: bool = False
 
 
-def _dtype(name: str):
-    if name == "bf16":
-        return torch.bfloat16
-    if name == "fp16":
-        return torch.float16
-    return torch.float32
+class GRPOTrainerEngine(BaseAlignmentTrainer):
+    """Self-hosted GRPO with explicit rollout, old-policy and update roles.
+
+    ``policy`` receives gradients. ``reference_policy`` is optional and frozen.
+    ``old_policy`` is represented by rollout log probabilities captured before
+    any optimizer update; it is never recomputed after an update.
+    """
+
+    def __init__(
+        self,
+        policy: ModelBackend,
+        config: GRPOConfig,
+        output_dir: str | Path,
+        reference_policy: ModelBackend | None = None,
+        generation_backend: Any | None = None,
+        reward_pipeline: RewardPipeline | None = None,
+    ) -> None:
+        alignment = AlignmentConfig(
+            seed=config.dataset_seed,
+            gradient_checkpointing=config.gradient_checkpointing,
+            checkpoint_interval=config.checkpoint_interval,
+            checkpoint_keep=config.checkpoint_keep,
+            resume_from_checkpoint=config.resume_from_checkpoint,
+            deterministic_smoke=config.deterministic_smoke,
+        )
+        super().__init__(policy, OptimizerConfig(config.learning_rate, config.weight_decay), alignment, output_dir)
+        self.config = config
+        self.policy = policy
+        self.reference_policy = reference_policy
+        self.generation_backend = generation_backend or ModelGenerationBackend(policy)
+        self.reward_pipeline = reward_pipeline or RuleBasedRewardPipeline()
+        self.output_dir = Path(output_dir)
+        if reference_policy is not None:
+            reference_policy.eval()
+            for parameter in reference_policy.parameters():
+                parameter.requires_grad_(False)
+
+    def _completion_mask(self, generated: torch.Tensor, prompt_length: int, pad_token_id: int) -> torch.Tensor:
+        labels = generated[:, 1:]
+        positions = torch.arange(labels.shape[1], device=generated.device).unsqueeze(0)
+        return ((labels != pad_token_id) & (positions >= max(prompt_length - 1, 0))).float()
+
+    def rollout(self, example: ReasoningExample, formatter: PromptFormatter) -> GRPOBatch:
+        started = perf_counter()
+        prompt = formatter.grpo_prompt(example, chat=self.config.use_chat_template)
+        tokenizer = self.policy.tokenizer
+        encoded = tokenizer(
+            [prompt] * self.config.group_size,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=self.config.max_prompt_length,
+        ).to(self.policy.device)
+        prompt_length = int(encoded["input_ids"].shape[-1])
+        self.policy.eval()
+        with torch.no_grad():
+            generated = self.generation_backend.generate(
+                **encoded,
+                do_sample=not self.config.deterministic_smoke,
+                temperature=self.config.temperature,
+                top_p=self.config.top_p,
+                max_new_tokens=self.config.max_new_tokens,
+                pad_token_id=tokenizer.pad_token_id,
+            )
+            attention = (generated != tokenizer.pad_token_id).long()
+            labels = generated[:, 1:].contiguous()
+            completion_mask = self._completion_mask(generated, prompt_length, tokenizer.pad_token_id)
+            old_output = self.policy.forward(ModelInputs(input_ids=generated[:, :-1], attention_mask=attention[:, :-1]))
+            old_logprobs = sequence_logprobs(old_output.logits, labels, completion_mask)
+            reference_logprobs = None
+            if self.reference_policy is not None:
+                ref_output = self.reference_policy.forward(ModelInputs(input_ids=generated[:, :-1], attention_mask=attention[:, :-1]))
+                reference_logprobs = sequence_logprobs(ref_output.logits, labels, completion_mask)
+        self.policy.train()
+        responses = tokenizer.batch_decode(generated[:, prompt_length:], skip_special_tokens=True)
+        rewards = self.reward_pipeline.evaluate(responses, example.reference_answer)
+        reward_values = torch.tensor([item["total_reward"] for item in rewards], dtype=torch.float32, device=self.policy.device)
+        advantages, zero_variance = normalize_group_advantages(reward_values, self.config.advantage_epsilon)
+        completion_lengths = completion_mask.sum(dim=-1)
+        eos_id = getattr(tokenizer, "eos_token_id", None)
+        completion_ids = generated[:, prompt_length:]
+        has_eos = torch.zeros(generated.shape[0], dtype=torch.bool, device=generated.device)
+        if eos_id is not None and completion_ids.numel():
+            has_eos = (completion_ids == eos_id).any(dim=-1)
+        truncated = (completion_lengths >= self.config.max_new_tokens) & ~has_eos
+        self.state.rollout_tokens += int(completion_lengths.sum().item())
+        batch = GRPOBatch(
+            prompt=prompt,
+            prompt_length=prompt_length,
+            generated_ids=generated,
+            attention_mask=attention,
+            completion_mask=completion_mask,
+            responses=responses,
+            rewards=rewards,
+            old_logprobs=old_logprobs.detach(),
+            reference_logprobs=reference_logprobs.detach() if reference_logprobs is not None else None,
+            truncated=truncated,
+            rollout_seconds=perf_counter() - started,
+            advantages=advantages.detach(),
+        )
+        batch._zero_variance = zero_variance  # Local rollout metadata, not serialized.
+        return batch
+
+    def optimize(self, batch: GRPOBatch) -> TrainingMetrics:
+        started = perf_counter()
+        generated = batch.generated_ids
+        labels = generated[:, 1:].contiguous()
+        output = self.policy.forward(ModelInputs(input_ids=generated[:, :-1], attention_mask=batch.attention_mask[:, :-1]))
+        new_logprobs = sequence_logprobs(output.logits, labels, batch.completion_mask)
+        policy_loss, ratios = clipped_policy_loss(
+            new_logprobs,
+            batch.old_logprobs,
+            batch.advantages if batch.advantages is not None else torch.zeros(generated.shape[0], device=generated.device),
+            batch.completion_mask,
+            self.config.clip_eps,
+        )
+        kl = torch.zeros((), device=generated.device)
+        if batch.reference_logprobs is not None:
+            kl = approximate_kl(new_logprobs, batch.reference_logprobs, batch.completion_mask)
+        entropy = token_entropy(output.logits, batch.completion_mask)
+        kl_loss = self.config.beta_kl * kl
+        loss = policy_loss + kl_loss - self.config.entropy_coef * entropy
+        loss.backward()
+        self.optimizer.step()
+        self.optimizer.zero_grad(set_to_none=True)
+        self.state.global_step += 1
+        self.state.optimizer_steps += 1
+        numeric_components: dict[str, list[float]] = {}
+        for reward in batch.rewards:
+            for name, value in reward.items():
+                if isinstance(value, (float, int)):
+                    numeric_components.setdefault(name, []).append(float(value))
+        reward_tensor = torch.tensor([item["total_reward"] for item in batch.rewards], device=generated.device)
+        completion_mask = batch.completion_mask.bool()
+        active_ratios = ratios[completion_mask]
+        return TrainingMetrics(
+            step=self.state.global_step,
+            loss=float(loss.detach().cpu()),
+            policy_loss=float(policy_loss.detach().cpu()),
+            kl_loss=float(kl_loss.detach().cpu()),
+            kl=float(kl.detach().cpu()),
+            entropy=float(entropy.detach().cpu()),
+            clip_fraction=float(((active_ratios - 1.0).abs() > self.config.clip_eps).float().mean().cpu()) if active_ratios.numel() else 0.0,
+            reward_mean=float(reward_tensor.mean().cpu()),
+            reward_std=float(reward_tensor.std(unbiased=False).cpu()),
+            advantage_mean=float(batch.advantages.mean().cpu()) if batch.advantages is not None else 0.0,
+            advantage_std=float(batch.advantages.std(unbiased=False).cpu()) if batch.advantages is not None else 0.0,
+            zero_variance_groups=int(getattr(batch, "_zero_variance", False)),
+            truncated_completions=int(batch.truncated.sum().item()),
+            rollout_tokens=int(batch.completion_mask.sum().item()),
+            rollout_seconds=batch.rollout_seconds,
+            optimization_seconds=perf_counter() - started,
+            reward_components={name: sum(values) / len(values) for name, values in numeric_components.items()},
+        )
+
+    def train(self, examples: list[ReasoningExample], formatter: PromptFormatter) -> None:
+        self.maybe_resume()
+        for index in tqdm(range(self.state.global_step, self.config.max_steps), desc="grpo"):
+            example = examples[index % len(examples)]
+            batch = self.rollout(example, formatter)
+            metrics = self.optimize(batch)
+            append_jsonl([metrics.to_dict()], self.output_dir / "train_metrics.jsonl")
+            append_jsonl([
+                {"step": metrics.step, "prompt": batch.prompt, "response": response, "gold_answer": example.reference_answer, "reward": reward}
+                for response, reward in zip(batch.responses, batch.rewards)
+            ], self.output_dir / "sampled_responses.jsonl")
+            if metrics.step % max(self.config.logging_steps, 1) == 0:
+                print(f"grpo step={metrics.step} loss={metrics.loss:.6f} reward={metrics.reward_mean:.4f} kl={metrics.kl:.6f}", flush=True)
+            if self.config.checkpoint_interval and metrics.step % self.config.checkpoint_interval == 0:
+                self.checkpoint(asdict(self.config))
 
 
-def train_grpo(config: GRPOConfig) -> None:
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-
-    # 1. 加载配置
-    ensure_dir(config.output_dir)
-    save_json(config.__dict__, f"{config.output_dir}/config.json")
+def _load_backend(config: GRPOConfig, *, reference: bool = False) -> ModelBackend:
     if config.bf16:
         config.dtype = "bf16"
     if config.fp16:
         config.dtype = "fp16"
-    model_path = config.model_name_or_path
-    candidate_checkpoint = __import__("pathlib").Path(model_path) / "checkpoint"
-    if candidate_checkpoint.exists():
-        model_path = str(candidate_checkpoint)
-    
-    # 2. 加载tokenizer和模型
-    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=config.trust_remote_code)
-    if tokenizer.pad_token_id is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    model = AutoModelForCausalLM.from_pretrained(
-        model_path,
-        torch_dtype=_dtype(config.dtype),
+    model_path = str(Path(config.resume_from_checkpoint) / "model") if config.resume_from_checkpoint else config.model_name_or_path
+    if not config.resume_from_checkpoint and (Path(model_path) / "checkpoint").exists():
+        model_path = str(Path(model_path) / "checkpoint")
+    return ModelBackendRegistry.from_config(ModelLoadConfig(
+        model_name_or_path=model_path,
+        revision=config.model_revision,
+        backend_name=config.backend_name,
+        custom_factory_name=config.custom_factory_name,
+        device=config.device,
+        dtype=config.dtype,
         trust_remote_code=config.trust_remote_code,
-        low_cpu_mem_usage=True,
-    )
-    ref = AutoModelForCausalLM.from_pretrained(
-        model_path,
-        torch_dtype=_dtype(config.dtype),
-        trust_remote_code=config.trust_remote_code,
-        low_cpu_mem_usage=True,
-    )
+        use_lora=config.use_lora and not reference,
+        lora_r=config.lora_r,
+        lora_alpha=config.lora_alpha,
+        lora_dropout=config.lora_dropout,
+        lora_target_modules=config.lora_target_modules,
+    ))
 
-    # 3. 设置lora和optimizer
-    if config.use_lora and hasattr(model, "peft_config"):
-        if hasattr(model, "enable_adapter_layers"):
-            model.enable_adapter_layers()
-        for name, param in model.named_parameters():
-            param.requires_grad_("lora_" in name or "modules_to_save" in name)
-        trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        print(f"Continuing existing PEFT adapter with {trainable} trainable parameters.", flush=True)
-    elif config.use_lora:
-        from peft import LoraConfig, get_peft_model
 
-        model = get_peft_model(
-            model,
-            LoraConfig(r=8, lora_alpha=16, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM"),
-        )
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
-    ref.to(device).eval()
-    for p in ref.parameters():
-        p.requires_grad_(False)
-    opt = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
-
-    # 4.读取训练数据
-    rows = read_jsonl(config.train_file)
-    progress = tqdm(range(config.max_steps), desc="grpo")
-    model.train()
-
-    # 5.每一步是一道题
-    for step in progress:
-        row = rows[step % len(rows)]
-        prompt = row["prompt"]
-        enc = tokenizer([prompt] * config.group_size, return_tensors="pt", padding=True, truncation=True, max_length=config.max_prompt_length).to(device)
-        with torch.no_grad():
-            # 模型生成Group Size个回答
-            generated = model.generate(
-                **enc,
-                do_sample=True,     #需要随机采样
-                temperature=config.temperature, #控制采样的随机程度，值越大越随机，值越小越确定（作用于最后一层的softmax函数，温度越高烫越平）
-                top_p=config.top_p, # top_p越高，候选词采样范围越大，用来兜底不至于产生废话
-                max_new_tokens=config.max_new_tokens,
-                pad_token_id=tokenizer.pad_token_id,
-            )
-        prompt_len = enc["input_ids"].shape[-1]
-        responses = tokenizer.batch_decode(generated[:, prompt_len:], skip_special_tokens=True)#只保留需要的答案部分
-        rewards = [rule_based_reward(x, row["answer"]) for x in responses]
-        reward_t = torch.tensor([x["total_reward"] for x in rewards], dtype=torch.float32, device=device)
-        adv = (reward_t - reward_t.mean()) / (reward_t.std(unbiased=False) + 1e-6)
-
-        labels = generated[:, 1:].contiguous()
-        #6.告诉模型看哪里
-        attn = (generated != tokenizer.pad_token_id).long()
-        mask = attn[:, 1:].float()
-        # Only optimize generated response tokens; prompt tokens are conditioning context.
-        mask[:, : max(prompt_len - 1, 0)] = 0.0
-        out = model(input_ids=generated[:, :-1], attention_mask=attn[:, :-1])
-        with torch.no_grad():
-            ref_out = ref(input_ids=generated[:, :-1], attention_mask=attn[:, :-1])
-        #7.softmax算p，logp算seq_logp，seq_logp算loss，kl是两个模型的logp差距
-        logp = sequence_logprobs(out.logits, labels, mask)
-        ref_logp = sequence_logprobs(ref_out.logits, labels, mask)
-        seq_logp = logp.sum(dim=-1) / mask.sum(dim=-1).clamp_min(1.0)
-        kl = approximate_kl(logp, ref_logp, mask)
-        policy_loss = -(adv.detach() * seq_logp).mean()
-        kl_loss = config.beta_kl * kl
-        loss = policy_loss + kl_loss
-        #8.反向传播
-        loss.backward()
-        opt.step()
-        opt.zero_grad(set_to_none=True)
-        #9.更新日志，保存模型
-        metrics = {
-            "step": step,
-            "loss": float(loss.detach().cpu()),
-            "policy_loss": float(policy_loss.detach().cpu()),
-            "kl_loss": float(kl_loss.detach().cpu()),
-            "kl": float(kl.detach().cpu()),
-            "reward_mean": float(reward_t.mean().detach().cpu()),
-            "reward_std": float(reward_t.std(unbiased=False).detach().cpu()),
-            "accuracy": sum(x["accuracy"] for x in rewards) / len(rewards),
-            "format_pass_rate": sum(x["format_pass"] for x in rewards) / len(rewards),
-            "invalid_rate": sum(x["invalid"] for x in rewards) / len(rewards),
-            "avg_response_length": sum(len(x.split()) for x in responses) / len(responses),
-        }
-        metrics["response_length"] = metrics["avg_response_length"]
-        append_jsonl([metrics], f"{config.output_dir}/train_metrics.jsonl")
-        if step % max(config.logging_steps, 1) == 0:
-            print(
-                "grpo "
-                f"step={step} loss={metrics['loss']:.6f} policy_loss={metrics['policy_loss']:.6f} "
-                f"kl_loss={metrics['kl_loss']:.6f} kl={metrics['kl']:.6f} "
-                f"reward_mean={metrics['reward_mean']:.6f} reward_std={metrics['reward_std']:.6f} "
-                f"accuracy={metrics['accuracy']:.4f} format_pass_rate={metrics['format_pass_rate']:.4f} "
-                f"invalid_rate={metrics['invalid_rate']:.4f} avg_response_length={metrics['response_length']:.2f}",
-                flush=True,
-            )
-        sample_rows = [
-            {"step": step, "prompt": prompt, "response": r, "gold_answer": row["answer"], "reward": rb}
-            for r, rb in zip(responses, rewards)
-        ]
-        append_jsonl(sample_rows, f"{config.output_dir}/sampled_responses.jsonl")
-        append_jsonl(sample_rows, f"{config.output_dir}/samples.jsonl")
-    model.save_pretrained(f"{config.output_dir}/checkpoint")
-    tokenizer.save_pretrained(f"{config.output_dir}/checkpoint")
-    save_json({"final_step": config.max_steps}, f"{config.output_dir}/metrics.json")
+def train_grpo(config: GRPOConfig) -> None:
+    """Backward-compatible GRPO entry point backed by :class:`GRPOTrainerEngine`."""
+    ensure_dir(config.output_dir)
+    policy = _load_backend(config)
+    reference = _load_backend(config, reference=True) if config.use_reference_policy else None
+    examples, fingerprint, _ = DatasetRegistry.load(DatasetLoadConfig(
+        dataset_name=config.dataset_name,
+        split=config.dataset_split,
+        config_name=config.dataset_config_name,
+        revision=config.dataset_revision,
+        source_path=config.train_file,
+        cache_dir=config.dataset_cache_dir,
+        max_samples=config.max_samples,
+        shuffle=config.dataset_shuffle,
+        seed=config.dataset_seed,
+        purpose="train",
+    ))
+    save_json(asdict(config), Path(config.output_dir) / "config.json")
+    save_json(fingerprint.to_dict(), Path(config.output_dir) / "dataset_fingerprint.json")
+    engine = GRPOTrainerEngine(policy, config, config.output_dir, reference)
+    engine.train(examples, PromptFormatter(config.system_prompt, config.final_answer_format))
+    policy.save_pretrained(Path(config.output_dir) / "checkpoint")  # Legacy path.
+    engine.checkpoint(asdict(config))
+    save_json({"final_step": engine.state.global_step, "rollout_tokens": engine.state.rollout_tokens}, Path(config.output_dir) / "metrics.json")

@@ -1,8 +1,8 @@
 learning_rate: 1.0e-5
 num_train_epochs: 1
 max_steps: -1
-batch_size: 1
-gradient_accumulation_steps: 8
+batch_size: 8
+gradient_accumulation_steps: 1
 max_length: 512
 use_lora: true
 lora_r: 8

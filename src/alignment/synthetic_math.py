@@ -61,13 +61,18 @@ def target_text(answer: str) -> str:
 
 
 def make_easy(rng: random.Random, sid: str, profile: str) -> MathSample:
-    """Create a controlled single-operation multiplication distribution."""
+    """Create controlled arithmetic distributions for calibration."""
+    if profile == "target_v4":
+        a, b, c = rng.randint(10, 49), rng.randint(10, 49), rng.randint(0, 19)
+        value = a + b - c
+        expr = f"{a} + {b} - {c}"
+        return MathSample(sid, "easy", f"Solve. Return only reasoning and answer tags.\nProblem: {expr}", str(value), {"expr": expr, "profile": profile})
     if profile == "target_v1":
         a, b = rng.randint(11, 29), rng.randint(2, 9)
     elif profile == "target_v2":
         a, b = rng.randint(20, 49), rng.randint(2, 6)
     else:  # target_v3
-        a, b = rng.randint(12, 39), rng.randint(2, 7)
+        a, b = rng.randint(2, 9), rng.randint(2, 9)
     value = a * b
     expr = f"{a} * {b}"
     return MathSample(sid, "easy", f"Solve. Return only reasoning and answer tags.\nProblem: {expr}", str(value), {"expr": expr, "profile": profile})
@@ -79,8 +84,10 @@ def make_medium(rng: random.Random, sid: str, profile: str) -> MathSample:
         a, b = rng.randint(10, 49), rng.randint(10, 49)
     elif profile == "target_v2":
         a, b = rng.randint(0, 19), rng.randint(0, 19)
+    elif profile == "target_v4":
+        a, b = rng.randint(0, 5), rng.randint(0, 5)
     else:  # target_v3
-        a, b = rng.randint(20, 69), rng.randint(0, 9)
+        a, b = rng.randint(0, 9), rng.randint(0, 9)
     value = a + b
     expr = f"{a} + {b}"
     return MathSample(sid, "medium", f"Solve. Use <reasoning>...</reasoning> and <answer>...</answer>.\nProblem: {expr}", str(value), {"expr": expr, "profile": profile})
@@ -91,7 +98,7 @@ def make_hard(rng: random.Random, sid: str, profile: str) -> MathSample:
     if profile == "target_v1":
         denom = rng.choice([2, 2, 2, 3])
         apples = rng.choice([24, 30, 36, 42, 48, 60])
-    elif profile == "target_v2":
+    elif profile in {"target_v2", "target_v4"}:
         denom = rng.choice([2, 2, 3])
         apples = rng.choice([18, 24, 30, 36, 42, 48])
     else:  # target_v3
@@ -134,7 +141,7 @@ def generate_dataset(
     seed: int = 42,
     profile: str = "target_v1",
 ) -> dict[str, list[dict[str, Any]]]:
-    if profile not in {"target_v1", "target_v2", "target_v3"}:
+    if profile not in {"target_v1", "target_v2", "target_v3", "target_v4"}:
         raise ValueError(f"Unknown profile: {profile}")
     ratios = (easy_ratio, medium_ratio, hard_ratio)
     return {

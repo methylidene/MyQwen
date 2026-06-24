@@ -1,26 +1,22 @@
 from __future__ import annotations
 
 import re
-from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from src.data.answers import AnswerExtractor
 
-ANSWER_RE = re.compile(r"<answer>\s*([^<]+?)\s*</answer>", re.IGNORECASE | re.DOTALL)
+
 REASONING_RE = re.compile(r"<reasoning>.*?</reasoning>", re.IGNORECASE | re.DOTALL)
 
 
 def extract_answer(output: str) -> str | None:
-    match = ANSWER_RE.search(output or "")
-    return match.group(1).strip() if match else None
+    """Compatibility wrapper for tagged model-output extraction."""
+    return AnswerExtractor.extract_tagged(output)
 
 
-def normalize_number(text: str | None) -> Decimal | None:
-    if text is None:
-        return None
-    try:
-        return Decimal(str(text).strip().replace(",", ""))
-    except (InvalidOperation, ValueError):
-        return None
+def normalize_number(text: str | None):
+    """Compatibility wrapper for numeric answer normalization."""
+    return AnswerExtractor.normalize_number(text)
 
 
 def rule_based_reward(output: str, gold_answer: str) -> dict[str, Any]:

@@ -33,10 +33,12 @@ def main() -> None:
     p = add_generation_args(argparse.ArgumentParser())
     p.add_argument("--prompt_file")
     p.add_argument("--cache_windows", nargs="*", type=int, default=[-1, 128, 256, 512])
+    p.add_argument("--backend_name", default="huggingface")
+    p.add_argument("--custom_factory_name", default=None)
     args = p.parse_args()
     set_seed(args.seed)
     prompts = load_prompts(args.prompt_file)
-    gen = KVCacheGenerator.from_pretrained(args.model_name_or_path, args.device, args.dtype, args.trust_remote_code)
+    gen = KVCacheGenerator.from_pretrained(args.model_name_or_path, args.device, args.dtype, args.trust_remote_code, args.backend_name, args.custom_factory_name)
     rows = []
     references = []
     for prompt in prompts:

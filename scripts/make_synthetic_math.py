@@ -25,7 +25,7 @@ def main() -> None:
     p.add_argument("--medium_ratio", type=float, default=0.4)
     p.add_argument("--hard_ratio", type=float, default=0.2)
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--profile", choices=["target_v1", "target_v2", "target_v3"], default="target_v1")
+    p.add_argument("--profile", choices=["target_v1", "target_v2", "target_v3", "target_v4"], default="target_v1")
     args = p.parse_args()
     data = generate_dataset(
         num_train=args.num_train,

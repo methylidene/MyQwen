@@ -4,7 +4,7 @@ import argparse
 
 
 def add_generation_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
-    parser.add_argument("--model_name_or_path", default="Qwen/Qwen2.5-0.5B")
+    parser.add_argument("--model_name_or_path", default="Qwen/Qwen2.5-3B")
     parser.add_argument("--output_dir", default="outputs")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--dtype", default="bf16", choices=["auto", "fp32", "fp16", "bf16"])

@@ -1,0 +1,69 @@
+name: qwen25_3b_gsm8k_sft.yaml
+task: sft
+smoke: false
+seed: 123
+data_seed: 456
+model:
+  model_name_or_path: Qwen/Qwen2.5-3B
+  revision: null
+  backend_name: huggingface
+  custom_factory_name: null
+  device: cuda
+  dtype: bf16
+  trust_remote_code: true
+  use_lora: true
+dataset:
+  name: gsm8k
+  split: train
+  config_name: main
+  revision: null
+  source_path: null
+  cache_dir: data/.cache/hf
+  max_samples: null
+  shuffle: true
+generation:
+  seed: 789
+  temperature: 0.8
+  top_p: 0.95
+  max_new_tokens: 128
+  max_prompt_length: 384
+  system_prompt: null
+  final_answer_format: "<answer>{answer}</answer>"
+  use_chat_template: false
+sft:
+  learning_rate: 2.0e-5
+  weight_decay: 0.0
+  num_train_epochs: 1.0
+  max_steps: -1
+  batch_size: 8
+  gradient_accumulation_steps: 1
+  max_length: 128
+  gradient_checkpointing: false
+  checkpoint_interval: 0
+  checkpoint_keep: 2
+grpo:
+  max_steps: 250
+  group_size: 4
+  learning_rate: 5.0e-6
+  weight_decay: 0.0
+  beta_kl: 0.02
+  clip_eps: 0.2
+  entropy_coef: 0.0
+  advantage_epsilon: 1.0e-6
+  forward_micro_batch_size: 2
+  use_reference_policy: true
+  gradient_checkpointing: false
+  checkpoint_interval: 0
+  checkpoint_keep: 2
+evaluation:
+  checkpoint_dirs: []
+  max_new_tokens: 128
+logging:
+  output_root: outputs/experiments
+  run_id: null
+  resume_from: null
+  allow_existing: false
+budget:
+  max_steps: null
+  max_wall_time_seconds: null
+  record_peak_vram: true

@@ -1,5 +1,5 @@
 # Local model weights and downloaded artifacts
-models/
+/models/
 .autodl/
 
 # Generated training outputs, checkpoints, and evaluation artifacts
@@ -9,6 +9,7 @@ outputs/
 data/smoke_math/
 data/smoke_prompts.jsonl
 data/synthetic_math_target_*/
+/data/.cache/
 
 # Python caches and virtual environments
 __pycache__/

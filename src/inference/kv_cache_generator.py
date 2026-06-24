@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .cache_utils import CacheStats, cache_seq_len, next_position_ids, position_ids_from_attention_mask, trim_past_key_values
+from src.models.backend import ModelBackendRegistry, ModelLoadConfig, ModelInputs
 
 
 @dataclass
@@ -39,19 +40,27 @@ class KVCacheGenerator:
             tokenizer.pad_token = tokenizer.eos_token
 
     @classmethod
-    def from_pretrained(cls, model_name_or_path: str, device: str = "cuda", dtype: str = "bf16", trust_remote_code: bool = True):
-        from transformers import AutoModelForCausalLM, AutoTokenizer
-
-        from .generation_utils import torch_dtype
-
-        tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code)
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name_or_path,
-            torch_dtype=torch_dtype(dtype),
-            trust_remote_code=trust_remote_code,
-            low_cpu_mem_usage=True,
+    def from_pretrained(
+        cls,
+        model_name_or_path: str,
+        device: str = "cuda",
+        dtype: str = "bf16",
+        trust_remote_code: bool = True,
+        backend_name: str = "huggingface",
+        custom_factory_name: str | None = None,
+    ):
+        backend = ModelBackendRegistry.from_config(
+            ModelLoadConfig(
+                model_name_or_path=model_name_or_path,
+                backend_name=backend_name,
+                custom_factory_name=custom_factory_name,
+                device=device,
+                dtype=dtype,
+                trust_remote_code=trust_remote_code,
+                use_lora=False,
+            )
         )
-        return cls(model=model, tokenizer=tokenizer, device=device)
+        return cls(model=backend, tokenizer=backend.tokenizer, device=device)
 
     def generate(
         self,
@@ -88,11 +97,13 @@ class KVCacheGenerator:
             for _ in range(max_new_tokens):
                 position_ids = position_ids_from_attention_mask(attention_mask)
                 t0 = time.perf_counter()
-                out = self.model(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    use_cache=False,
+                out = self.model.forward(
+                    ModelInputs(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        position_ids=position_ids,
+                        use_cache=False,
+                    )
                 )
                 step_latencies.append(time.perf_counter() - t0)
                 next_token = out.logits[:, -1, :].argmax(dim=-1, keepdim=True)
@@ -133,11 +144,13 @@ class KVCacheGenerator:
         with torch.no_grad():
             prefill_start = time.perf_counter()
             position_ids = position_ids_from_attention_mask(context_attention)
-            out = self.model(
-                input_ids=context_ids,
-                attention_mask=context_attention,
-                position_ids=position_ids,
-                use_cache=True,
+            out = self.model.forward(
+                ModelInputs(
+                    input_ids=context_ids,
+                    attention_mask=context_attention,
+                    position_ids=position_ids,
+                    use_cache=True,
+                )
             )
             prefill_latency = time.perf_counter() - prefill_start
             past = out.past_key_values
@@ -160,11 +173,13 @@ class KVCacheGenerator:
                     window_mask = context_attention[:, start:]
                     absolute_positions = torch.arange(start, context_ids.shape[-1], device=self.device).unsqueeze(0)
                     t0 = time.perf_counter()
-                    rebuild = self.model(
-                        input_ids=window_ids,
-                        attention_mask=window_mask,
-                        position_ids=absolute_positions,
-                        use_cache=True,
+                    rebuild = self.model.forward(
+                        ModelInputs(
+                            input_ids=window_ids,
+                            attention_mask=window_mask,
+                            position_ids=absolute_positions,
+                            use_cache=True,
+                        )
                     )
                     step_latencies.append(time.perf_counter() - t0)
                     past = trim_past_key_values(rebuild.past_key_values, cache_window)
@@ -176,12 +191,14 @@ class KVCacheGenerator:
                 decode_attention = torch.ones((1, cache_len + 1), dtype=context_attention.dtype, device=self.device)
                 pos = next_position_ids([context_ids.shape[-1] - 1], self.device)
                 t0 = time.perf_counter()
-                out = self.model(
-                    input_ids=next_token,
-                    attention_mask=decode_attention,
-                    position_ids=pos,
-                    past_key_values=past,
-                    use_cache=True,
+                out = self.model.forward(
+                    ModelInputs(
+                        input_ids=next_token,
+                        attention_mask=decode_attention,
+                        position_ids=pos,
+                        past_key_values=past,
+                        use_cache=True,
+                    )
                 )
                 step_latencies.append(time.perf_counter() - t0)
                 past = out.past_key_values
