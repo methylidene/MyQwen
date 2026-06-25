@@ -57,6 +57,14 @@ def fake_gsm8k(monkeypatch):
     return calls
 
 
+def test_answer_normalization_accepts_unambiguous_numeric_text():
+    assert str(AnswerExtractor.normalize_number("$1,234")) == "1234"
+    assert str(AnswerExtractor.normalize_number("18 dollars")) == "18"
+    assert AnswerExtractor.normalize_number("1 then 2") is None
+    assert AnswerExtractor.is_bare_number("1,234")
+    assert not AnswerExtractor.is_bare_number("$1,234")
+
+
 def test_gsm8k_final_answer_extraction_and_schema(monkeypatch):
     calls = fake_gsm8k(monkeypatch)
     examples, _, report = DatasetRegistry.load(

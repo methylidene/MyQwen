@@ -19,7 +19,9 @@ class PromptFormatter:
     def _instruction(self) -> str:
         return (
             f"Show your reasoning between {self.reasoning_open_tag} and {self.reasoning_close_tag}, "
-            f"then provide the final answer as {self.final_answer_format.format(answer='...')}."
+            f"keep it concise, then provide only the bare numeric final answer as "
+            f"{self.final_answer_format.format(answer='...')}. Do not include units, currency symbols, "
+            "or explanatory text inside the answer tags."
         )
 
     def plain_completion(self, example: ReasoningExample) -> str:
@@ -39,11 +41,21 @@ class PromptFormatter:
     def sft_completion(self, example: ReasoningExample) -> str:
         solution = example.reference_solution.strip()
         answer = self.final_answer_format.format(answer=example.reference_answer)
-        if not solution:
-            return answer
-        if answer in solution:
-            return solution
-        return f"{solution}\n{answer}"
+        if self.reasoning_open_tag in solution and self.reasoning_close_tag in solution:
+            reasoning = solution
+        else:
+            reasoning_lines = []
+            for line in solution.splitlines():
+                if line.strip().startswith("####"):
+                    continue
+                reasoning_lines.append(line)
+            reasoning_body = "\n".join(reasoning_lines).strip()
+            if not reasoning_body:
+                return answer
+            reasoning = f"{self.reasoning_open_tag}\n{reasoning_body}\n{self.reasoning_close_tag}"
+        if answer in reasoning:
+            return reasoning
+        return f"{reasoning}\n{answer}"
 
     def sft_text(self, example: ReasoningExample, *, chat: bool = False) -> tuple[str, str]:
         prompt = self.grpo_prompt(example, chat=chat)

@@ -20,6 +20,7 @@ from src.utils.io import save_json, write_bilingual_readme, write_csv, write_jso
 class EvaluationGenerationConfig:
     max_new_tokens: int = 128
     num_generations: int = 1
+    batch_size: int = 1
     use_cache: bool = True
     cache_window: int | None = None
     seed: int | None = None
@@ -31,6 +32,7 @@ class VerificationResult:
     normalized_answer: str | None
     correctness: bool
     format_valid: bool
+    strict_format_valid: bool
     invalid_reason: str | None
     parser_error: bool
     multiple_conflicting_answers: bool
@@ -47,15 +49,16 @@ class AnswerVerifier:
         conflicting = len(set(values)) > 1
         normalized = AnswerExtractor.normalize_number(extracted)
         reference = AnswerExtractor.normalize_number(reference_answer)
+        strict_format = AnswerExtractor.is_bare_number(extracted)
         if not values:
-            return VerificationResult(None, None, False, False, "no_final_answer", False, False)
+            return VerificationResult(None, None, False, False, False, "no_final_answer", False, False)
         if conflicting:
-            return VerificationResult(extracted, str(normalized) if normalized is not None else None, False, False, "multiple_conflicting_answers", normalized is None, True)
+            return VerificationResult(extracted, str(normalized) if normalized is not None else None, False, False, strict_format, "multiple_conflicting_answers", normalized is None, True)
         if normalized is None:
-            return VerificationResult(extracted, None, False, False, "parser_error", True, False)
+            return VerificationResult(extracted, None, False, False, False, "parser_error", True, False)
         if reference is None:
-            return VerificationResult(extracted, str(normalized), False, True, "reference_parser_error", True, False)
-        return VerificationResult(extracted, str(normalized), normalized == reference, True, None, False, False)
+            return VerificationResult(extracted, str(normalized), False, True, strict_format, "reference_parser_error", True, False)
+        return VerificationResult(extracted, str(normalized), normalized == reference, True, strict_format, None, False, False)
 
 
 class GenerationBackend(Protocol):
@@ -72,7 +75,13 @@ class KVGenerationBackend:
         self.generator = generator
 
     def generate(self, prompts: list[str], config: EvaluationGenerationConfig) -> list[Any]:
-        return self.generator.generate(prompts, config.max_new_tokens, config.use_cache, config.cache_window)
+        return self.generator.generate(
+            prompts,
+            config.max_new_tokens,
+            config.use_cache,
+            config.cache_window,
+            batch_size=config.batch_size,
+        )
 
 
 @dataclass
@@ -86,14 +95,19 @@ class Evaluator:
     def evaluate(self, examples: list[ReasoningExample], config: EvaluationGenerationConfig) -> list[dict[str, Any]]:
         if config.num_generations < 1:
             raise ValueError("num_generations must be at least one.")
+        if config.batch_size < 1:
+            raise ValueError("batch_size must be at least one.")
         prompts = [self.formatter.grpo_prompt(item) for item in examples]
         predictions: list[dict[str, Any]] = []
         for generation_index in range(config.num_generations):
-            results = self.generation_backend.generate(prompts, config)
-            if len(results) != len(examples):
-                raise ValueError("GenerationBackend returned a result count different from prompt count.")
-            for example, prompt, result in zip(examples, prompts, results):
-                predictions.append(self._prediction(example, prompt, result, config, generation_index))
+            for start in range(0, len(examples), config.batch_size):
+                batch_examples = examples[start : start + config.batch_size]
+                batch_prompts = prompts[start : start + config.batch_size]
+                results = self.generation_backend.generate(batch_prompts, config)
+                if len(results) != len(batch_examples):
+                    raise ValueError("GenerationBackend returned a result count different from prompt count.")
+                for example, prompt, result in zip(batch_examples, batch_prompts, results):
+                    predictions.append(self._prediction(example, prompt, result, config, generation_index))
         return predictions
 
     def _prediction(self, example: ReasoningExample, prompt: str, result: Any, config: EvaluationGenerationConfig, generation_index: int) -> dict[str, Any]:
@@ -118,6 +132,8 @@ class Evaluator:
             "normalized_answer": verification.normalized_answer,
             "correctness": verification.correctness,
             "format_validity": verification.format_valid,
+            "answer_parse_validity": verification.format_valid,
+            "strict_format_validity": verification.strict_format_valid,
             "invalid_reason": verification.invalid_reason,
             "parser_error": verification.parser_error,
             "reward_breakdown": reward,
@@ -199,6 +215,7 @@ def aggregate_rows(rows: list[dict[str, Any]], rollout_tokens: int | None = None
         "accuracy": sum(bool(row["correctness"]) for row in rows) / n if n else 0.0,
         "pass_at_1": pass_at_k(rows, 1),
         "format_pass_rate": sum(bool(row["format_validity"]) for row in rows) / n if n else 0.0,
+        "strict_format_pass_rate": sum(bool(row.get("strict_format_validity", row["format_validity"])) for row in rows) / n if n else 0.0,
         "invalid_rate": sum(not bool(row["format_validity"]) for row in rows) / n if n else 0.0,
         "parser_error_rate": sum(bool(row["parser_error"]) for row in rows) / n if n else 0.0,
         "average_reward": sum(float(reward.get("total_reward", 0.0)) for reward in rewards) / n if n else 0.0,
@@ -303,7 +320,8 @@ def _write_report(path: Path, config: dict[str, Any], grouped: dict[str, Any], p
         "# Evaluation Report", "", "## Experiment Summary", f"Samples: {overall['n']}", "",
         "## Configuration", "```json", json.dumps(config, indent=2, ensure_ascii=False), "```", "",
         "## Main Results", f"Accuracy: {overall['accuracy']:.4f}", f"Pass@1: {overall['pass_at_1']['value']}",
-        f"Format pass rate: {overall['format_pass_rate']:.4f}", f"Invalid rate: {overall['invalid_rate']:.4f}", "",
+        f"Format pass rate: {overall['format_pass_rate']:.4f}", f"Strict format pass rate: {overall['strict_format_pass_rate']:.4f}",
+        f"Invalid rate: {overall['invalid_rate']:.4f}", "",
         "## Efficiency", f"Completion tokens (mean/median): {overall['average_completion_tokens']:.2f}/{overall['median_completion_tokens']:.2f}",
         f"Latency (mean): {overall['average_latency_seconds']:.4f}s", f"Tokens/s: {overall['tokens_per_second']:.2f}",
         f"Peak VRAM: {overall['peak_vram_mb']:.2f} MiB", f"Training rollout tokens: {rollout_tokens if rollout_tokens is not None else 'unavailable'}", "",
@@ -335,6 +353,7 @@ def load_predictions_compatible(path: str | Path) -> list[dict[str, Any]]:
             "reference_answer": reference, "raw_completion": completion, "extracted_answer": verified.extracted_answer,
             "normalized_answer": verified.normalized_answer, "correctness": bool(reward.get("accuracy", verified.correctness)),
             "format_validity": bool(reward.get("format_pass", verified.format_valid)), "invalid_reason": verified.invalid_reason,
+            "answer_parse_validity": verified.format_valid, "strict_format_validity": verified.strict_format_valid,
             "parser_error": verified.parser_error, "reward_breakdown": reward, "prompt": row.get("prompt", ""), "prompt_tokens": 0,
             "completion_tokens": len(str(completion).split()), "latency_seconds": 0.0, "tokens_per_second": 0.0, "truncated": False,
             "generation_config": {}, "generation_index": 0, "checkpoint_id": row.get("checkpoint_id", "legacy"), "seed": row.get("seed"),

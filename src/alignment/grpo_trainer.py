@@ -84,6 +84,11 @@ class GRPOConfig:
     use_chat_template: bool = False
     deterministic_smoke: bool = False
 
+    def __post_init__(self) -> None:
+        budget = self.max_generated_completion_tokens
+        if budget is not None and (isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0):
+            raise ValueError("max_generated_completion_tokens must be a positive integer when provided.")
+
 
 def reached_completion_token_budget(rollout_tokens: int, completion_token_budget: int | None) -> bool:
     """Return whether cumulative generated completion tokens reached the optional cap."""
@@ -161,8 +166,11 @@ class GRPOTrainerEngine(BaseAlignmentTrainer):
             old_logprobs = sequence_logprobs(old_output.logits, labels, completion_mask)
             reference_logprobs = None
             if self.reference_policy is not None:
+                if self.reference_policy.device != self.policy.device:
+                    self.reference_policy.to(self.policy.device)
                 ref_output = self.reference_policy.forward(ModelInputs(input_ids=generated[:, :-1], attention_mask=attention[:, :-1]))
-                reference_logprobs = sequence_logprobs(ref_output.logits, labels, completion_mask)
+                reference_logprobs = sequence_logprobs(ref_output.logits, labels, completion_mask).detach()
+                del ref_output
         self.policy.train()
         responses = tokenizer.batch_decode(generated[:, prompt_length:], skip_special_tokens=True)
         rewards = self.reward_pipeline.evaluate(responses, example.reference_answer)
@@ -197,22 +205,53 @@ class GRPOTrainerEngine(BaseAlignmentTrainer):
         started = perf_counter()
         generated = batch.generated_ids
         labels = generated[:, 1:].contiguous()
-        output = self.policy.forward(ModelInputs(input_ids=generated[:, :-1], attention_mask=batch.attention_mask[:, :-1]))
-        new_logprobs = sequence_logprobs(output.logits, labels, batch.completion_mask)
-        policy_loss, ratios = clipped_policy_loss(
-            new_logprobs,
-            batch.old_logprobs,
-            batch.advantages if batch.advantages is not None else torch.zeros(generated.shape[0], device=generated.device),
-            batch.completion_mask,
-            self.config.clip_eps,
-        )
-        kl = torch.zeros((), device=generated.device)
-        if batch.reference_logprobs is not None:
-            kl = approximate_kl(new_logprobs, batch.reference_logprobs, batch.completion_mask)
-        entropy = token_entropy(output.logits, batch.completion_mask)
-        kl_loss = self.config.beta_kl * kl
-        loss = policy_loss + kl_loss - self.config.entropy_coef * entropy
-        loss.backward()
+        advantages = batch.advantages if batch.advantages is not None else torch.zeros(generated.shape[0], device=generated.device)
+        micro_batch_size = max(1, self.config.forward_micro_batch_size)
+        total_sequences = max(int(generated.shape[0]), 1)
+        total_tokens = batch.completion_mask.sum().clamp_min(1.0)
+        policy_loss_value = 0.0
+        kl_value = 0.0
+        entropy_value = 0.0
+        clipped_tokens = 0
+        active_tokens = 0
+        self.optimizer.zero_grad(set_to_none=True)
+        for start in range(0, total_sequences, micro_batch_size):
+            stop = min(start + micro_batch_size, total_sequences)
+            mask = batch.completion_mask[start:stop]
+            output = self.policy.forward(
+                ModelInputs(input_ids=generated[start:stop, :-1], attention_mask=batch.attention_mask[start:stop, :-1])
+            )
+            new_logprobs = sequence_logprobs(output.logits, labels[start:stop], mask)
+            policy_loss, ratios = clipped_policy_loss(
+                new_logprobs,
+                batch.old_logprobs[start:stop],
+                advantages[start:stop],
+                mask,
+                self.config.clip_eps,
+            )
+            sequence_weight = (stop - start) / total_sequences
+            token_weight = mask.sum() / total_tokens
+            kl = torch.zeros((), device=generated.device)
+            if batch.reference_logprobs is not None:
+                kl = approximate_kl(new_logprobs, batch.reference_logprobs[start:stop], mask)
+            entropy = (
+                token_entropy(output.logits, mask)
+                if self.config.entropy_coef
+                else torch.zeros((), device=generated.device)
+            )
+            loss = policy_loss * sequence_weight + self.config.beta_kl * kl * token_weight - self.config.entropy_coef * entropy * token_weight
+            loss.backward()
+            policy_loss_value += float(policy_loss.detach().cpu()) * sequence_weight
+            token_weight_value = float(token_weight.detach().cpu())
+            kl_value += float(kl.detach().cpu()) * token_weight_value
+            entropy_value += float(entropy.detach().cpu()) * token_weight_value
+            active_ratios = ratios[mask.bool()]
+            if active_ratios.numel():
+                clipped_tokens += int(((active_ratios - 1.0).abs() > self.config.clip_eps).sum().item())
+                active_tokens += int(active_ratios.numel())
+            del output, new_logprobs, policy_loss, ratios, kl, entropy, loss
+            if generated.device.type == "cuda":
+                torch.cuda.empty_cache()
         self.optimizer.step()
         self.optimizer.zero_grad(set_to_none=True)
         self.state.global_step += 1
@@ -223,16 +262,16 @@ class GRPOTrainerEngine(BaseAlignmentTrainer):
                 if isinstance(value, (float, int)):
                     numeric_components.setdefault(name, []).append(float(value))
         reward_tensor = torch.tensor([item["total_reward"] for item in batch.rewards], device=generated.device)
-        completion_mask = batch.completion_mask.bool()
-        active_ratios = ratios[completion_mask]
+        kl_loss_value = self.config.beta_kl * kl_value
+        loss_value = policy_loss_value + kl_loss_value - self.config.entropy_coef * entropy_value
         return TrainingMetrics(
             step=self.state.global_step,
-            loss=float(loss.detach().cpu()),
-            policy_loss=float(policy_loss.detach().cpu()),
-            kl_loss=float(kl_loss.detach().cpu()),
-            kl=float(kl.detach().cpu()),
-            entropy=float(entropy.detach().cpu()),
-            clip_fraction=float(((active_ratios - 1.0).abs() > self.config.clip_eps).float().mean().cpu()) if active_ratios.numel() else 0.0,
+            loss=loss_value,
+            policy_loss=policy_loss_value,
+            kl_loss=kl_loss_value,
+            kl=kl_value,
+            entropy=entropy_value,
+            clip_fraction=(clipped_tokens / active_tokens) if active_tokens else 0.0,
             reward_mean=float(reward_tensor.mean().cpu()),
             reward_std=float(reward_tensor.std(unbiased=False).cpu()),
             advantage_mean=float(batch.advantages.mean().cpu()) if batch.advantages is not None else 0.0,

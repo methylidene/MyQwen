@@ -56,6 +56,26 @@ def test_sft_prompt_loss_mask():
     assert (item["labels"] != -100).any()
 
 
+def test_sft_completion_uses_canonical_reasoning_and_answer_tags():
+    sample = ReasoningExample(
+        uid="gsm8k-tiny",
+        dataset_name="gsm8k",
+        split="train",
+        question="Natalia sold 48 clips and half as many later. Total?",
+        reference_answer="72",
+        reference_solution="Natalia sold 48/2 = <<48/2=24>>24 clips in May.\nNatalia sold 48+24 = <<48+24=72>>72 clips altogether.\n#### 72",
+        difficulty="easy",
+    )
+
+    completion = PromptFormatter().sft_completion(sample)
+
+    assert completion.startswith("<reasoning>\n")
+    assert "#### 72" not in completion
+    assert completion.count("<answer>72</answer>") == 1
+    assert completion.endswith("</answer>")
+    assert "</reasoning>\n<answer>72</answer>" in completion
+
+
 def test_group_advantage_and_constant_reward_group():
     advantages, zero_variance = normalize_group_advantages(torch.tensor([1.0, 2.0, 3.0]))
     assert not zero_variance

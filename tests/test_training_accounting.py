@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.alignment import grpo_trainer
-from src.alignment.grpo_trainer import GRPOTrainerEngine, reached_completion_token_budget, train_grpo
+from src.alignment.grpo_trainer import GRPOConfig, GRPOTrainerEngine, reached_completion_token_budget, train_grpo
 
 
 class DeterministicTrainEngine:
@@ -138,3 +138,69 @@ def test_run_grpo_cli_parses_completion_token_budget(tmp_path, monkeypatch):
     module.main()
 
     assert captured["config"].max_generated_completion_tokens == 4096
+
+
+@pytest.mark.parametrize("completion_token_budget", [-1, 0, True, 1.5])
+def test_direct_grpo_config_rejects_invalid_completion_token_budget(tmp_path, completion_token_budget):
+    with pytest.raises(ValueError, match="max_generated_completion_tokens"):
+        GRPOConfig(
+            model_name_or_path="tiny",
+            output_dir=str(tmp_path),
+            max_generated_completion_tokens=completion_token_budget,
+        )
+
+
+@pytest.mark.parametrize("completion_token_budget", ["0", "-1"])
+def test_run_grpo_cli_rejects_non_positive_completion_token_budget(tmp_path, monkeypatch, completion_token_budget):
+    module_path = Path(__file__).parents[1] / "scripts" / "run_grpo.py"
+    spec = importlib.util.spec_from_file_location("test_run_grpo_invalid_budget", module_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, "train_grpo", lambda config: pytest.fail("invalid configuration must not train"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_grpo.py",
+            "--output_dir",
+            str(tmp_path),
+            "--max_generated_completion_tokens",
+            completion_token_budget,
+        ],
+    )
+
+    with pytest.raises(ValueError, match="max_generated_completion_tokens"):
+        module.main()
+
+
+def test_run_grpo_cli_rejects_boolean_completion_token_budget_from_config(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("max_generated_completion_tokens: true\n", encoding="utf-8")
+    module_path = Path(__file__).parents[1] / "scripts" / "run_grpo.py"
+    spec = importlib.util.spec_from_file_location("test_run_grpo_boolean_budget", module_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, "train_grpo", lambda config: pytest.fail("invalid configuration must not train"))
+    monkeypatch.setattr(sys, "argv", ["run_grpo.py", "--config", str(config_path), "--output_dir", str(tmp_path)])
+
+    with pytest.raises(ValueError, match="max_generated_completion_tokens"):
+        module.main()
+
+
+def test_run_grpo_cli_rejects_float_completion_token_budget(tmp_path, monkeypatch):
+    module_path = Path(__file__).parents[1] / "scripts" / "run_grpo.py"
+    spec = importlib.util.spec_from_file_location("test_run_grpo_float_budget", module_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, "train_grpo", lambda config: pytest.fail("invalid configuration must not train"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_grpo.py", "--output_dir", str(tmp_path), "--max_generated_completion_tokens", "1.5"],
+    )
+
+    with pytest.raises(SystemExit):
+        module.main()

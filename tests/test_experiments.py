@@ -118,6 +118,25 @@ def test_evaluation_cannot_use_train_split(tmp_path):
         experiment_from_dict(value)
 
 
+def test_qwen25_gsm8k_configs_use_long_form_reasoning_lengths():
+    from src.experiments.config import load_experiment_config
+
+    config_names = [
+        "qwen25_3b_gsm8k_sft.yaml",
+        "qwen25_3b_gsm8k_sft_continued.yaml",
+        "qwen25_3b_gsm8k_grpo_g4.yaml",
+        "qwen25_3b_gsm8k_grpo_g8.yaml",
+    ]
+    for name in config_names:
+        config = load_experiment_config(Path("configs/experiments") / name)
+        assert config.sft.max_length >= 512
+        assert config.generation.max_new_tokens >= 256
+        assert config.evaluation.max_new_tokens >= 256
+    continued = load_experiment_config(Path("configs/experiments/qwen25_3b_gsm8k_sft_continued.yaml"))
+    assert continued.logging.stage_name == "SFT-continued"
+    assert continued.sft.learning_rate <= load_experiment_config(Path("configs/experiments/qwen25_3b_gsm8k_sft.yaml")).sft.learning_rate
+
+
 def test_runner_propagates_grpo_completion_token_budget(tmp_path, monkeypatch):
     value = mapping(tmp_path)
     value["task"] = "grpo"

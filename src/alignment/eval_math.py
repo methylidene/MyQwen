@@ -12,8 +12,14 @@ def aggregate_predictions(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any
     return metrics_by_group(rows)["groups"]["difficulty"]
 
 
-def evaluate_with_generator(generator: Any, samples: list[ReasoningExample], max_new_tokens: int = 128, formatter: PromptFormatter | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def evaluate_with_generator(
+    generator: Any,
+    samples: list[ReasoningExample],
+    max_new_tokens: int = 128,
+    formatter: PromptFormatter | None = None,
+    batch_size: int = 1,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     formatter = formatter or PromptFormatter()
     evaluator = Evaluator(KVGenerationBackend(generator), formatter)
-    predictions = evaluator.evaluate(samples, EvaluationGenerationConfig(max_new_tokens=max_new_tokens))
+    predictions = evaluator.evaluate(samples, EvaluationGenerationConfig(max_new_tokens=max_new_tokens, batch_size=batch_size))
     return predictions, aggregate_predictions(predictions)

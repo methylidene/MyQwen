@@ -68,9 +68,14 @@ class KVCacheGenerator:
         max_new_tokens: int = 128,
         use_cache: bool = True,
         cache_window: int | None = None,
+        batch_size: int = 1,
     ) -> list[GenerationResult]:
         if isinstance(prompts, str):
             prompts = [prompts]
+        if batch_size < 1:
+            raise ValueError("batch_size must be at least one.")
+        if batch_size > 1 and use_cache and cache_window is None and getattr(getattr(self.model, "capabilities", None), "supports_generate", False):
+            return self._generate_hf_batches(prompts, max_new_tokens=max_new_tokens, batch_size=batch_size)
         return [
             self._generate_one(prompt, max_new_tokens=max_new_tokens, use_cache=use_cache, cache_window=cache_window)
             for prompt in prompts
@@ -78,6 +83,54 @@ class KVCacheGenerator:
 
     def _encode(self, prompt: str):
         return self.tokenizer(prompt, return_tensors="pt", padding=False).to(self.device)
+
+    def _generate_hf_batches(self, prompts: list[str], max_new_tokens: int, batch_size: int) -> list[GenerationResult]:
+        import torch
+
+        results: list[GenerationResult] = []
+        original_padding_side = getattr(self.tokenizer, "padding_side", "right")
+        self.tokenizer.padding_side = "left"
+        try:
+            for start in range(0, len(prompts), batch_size):
+                batch_prompts = prompts[start : start + batch_size]
+                enc = self.tokenizer(batch_prompts, return_tensors="pt", padding=True).to(self.device)
+                input_width = int(enc["input_ids"].shape[-1])
+                started = time.perf_counter()
+                with torch.no_grad():
+                    output_ids = self.model.generate(
+                        input_ids=enc["input_ids"],
+                        attention_mask=enc.get("attention_mask"),
+                        max_new_tokens=max_new_tokens,
+                        do_sample=False,
+                        pad_token_id=getattr(self.tokenizer, "pad_token_id", None),
+                        eos_token_id=self.eos_token_id,
+                        use_cache=True,
+                    )
+                batch_latency = time.perf_counter() - started
+                per_item_latency = batch_latency / max(len(batch_prompts), 1)
+                for prompt, row in zip(batch_prompts, output_ids):
+                    token_ids = row.tolist()
+                    generated = token_ids[input_width:]
+                    if self.eos_token_id is not None and self.eos_token_id in generated:
+                        generated = generated[: generated.index(self.eos_token_id) + 1]
+                    results.append(
+                        GenerationResult(
+                            prompt=prompt,
+                            generated_text=self.tokenizer.decode(generated, skip_special_tokens=True),
+                            token_ids=token_ids,
+                            generated_token_ids=generated,
+                            step_latencies=[],
+                            prefill_latency=0.0,
+                            total_latency=per_item_latency,
+                            cache_rebuild_count=0,
+                            avg_cache_seq_len=float(input_width + len(generated) / 2),
+                            max_cache_seq_len=input_width + len(generated),
+                            mode=f"hf-batch-generate-{len(batch_prompts)}",
+                        )
+                    )
+        finally:
+            self.tokenizer.padding_side = original_padding_side
+        return results
 
     def _generate_one(self, prompt: str, max_new_tokens: int, use_cache: bool, cache_window: int | None) -> GenerationResult:
         if use_cache:

@@ -18,6 +18,23 @@ from src.inference.kv_cache_generator import KVCacheGenerator
 from src.utils.io import save_json, write_bilingual_readme, write_csv
 
 
+def _slug(text: str) -> str:
+    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.")
+    return "".join(ch if ch in allowed else "-" for ch in text).strip("-._") or "checkpoint"
+
+
+def checkpoint_output_name(checkpoint: str | Path) -> str:
+    path = Path(checkpoint)
+    parts = path.parts
+    if path.name == "checkpoints" and len(parts) >= 3:
+        return _slug(f"{parts[-3]}__{parts[-2]}")
+    if path.name == "checkpoint" and len(parts) >= 4 and parts[-2] == "checkpoints":
+        return _slug(f"{parts[-4]}__{parts[-3]}")
+    if len(parts) >= 2:
+        return _slug(f"{parts[-2]}__{parts[-1]}")
+    return _slug(path.name)
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--test_file")
@@ -34,6 +51,7 @@ def main() -> None:
     p.add_argument("--checkpoint_dirs", nargs="+", required=True)
     p.add_argument("--output_dir", required=True)
     p.add_argument("--max_new_tokens", type=int, default=128)
+    p.add_argument("--batch_size", type=int, default=1)
     p.add_argument("--device", default="cuda")
     p.add_argument("--dtype", default="bf16")
     p.add_argument("--trust_remote_code", action=argparse.BooleanOptionalAction, default=True)
@@ -66,10 +84,10 @@ def main() -> None:
     summary_rows = []
     report_lines = ["# Alignment Evaluation Report", ""]
     for ckpt in args.checkpoint_dirs:
-        name = Path(ckpt).name
+        name = checkpoint_output_name(ckpt)
         model_path = str(Path(ckpt) / "checkpoint") if (Path(ckpt) / "checkpoint").exists() else ckpt
         gen = KVCacheGenerator.from_pretrained(model_path, args.device, args.dtype, args.trust_remote_code, args.backend_name, args.custom_factory_name)
-        preds, metrics = evaluate_with_generator(gen, samples, args.max_new_tokens, formatter)
+        preds, metrics = evaluate_with_generator(gen, samples, args.max_new_tokens, formatter, batch_size=args.batch_size)
         exp_dir = output_root / name
         config_payload = vars(args) | {"experiment_name": name, "dataset_fingerprint": fingerprint.to_dict()}
         save_json(config_payload, exp_dir / "config.json")

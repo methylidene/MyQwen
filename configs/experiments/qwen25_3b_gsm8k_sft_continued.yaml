@@ -1,10 +1,10 @@
-name: qwen25_3b_gsm8k_GRPO-G4-250
-task: grpo
+name: qwen25_3b_gsm8k_SFT-continued
+task: sft
 smoke: false
 seed: 123
 data_seed: 456
 model:
-  model_name_or_path: outputs/v02_qwen25_3b/exp01_gsm8k_main/SFT-continued/20260625T051803Z-c4ff20c9/checkpoints/checkpoint
+  model_name_or_path: outputs/v02_qwen25_3b/exp01_gsm8k_main/SFT-only/REPLACE_WITH_RUN_ID/checkpoints
   revision: null
   backend_name: huggingface
   custom_factory_name: null
@@ -31,7 +31,7 @@ generation:
   final_answer_format: <answer>{answer}</answer>
   use_chat_template: false
 sft:
-  learning_rate: 2.0e-05
+  learning_rate: 1.0e-05
   weight_decay: 0.0
   num_train_epochs: 1.0
   max_steps: -1
@@ -64,7 +64,7 @@ logging:
   resume_from: null
   allow_existing: false
   experiment_dir: exp01_gsm8k_main
-  stage_name: GRPO-G4-250
+  stage_name: SFT-continued
 budget:
   max_steps: null
   max_wall_time_seconds: null
